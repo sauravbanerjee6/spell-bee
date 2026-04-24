@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spell Bee Bot</title>
+  <style>
+    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: #f5f5f0; margin: 0; }
+    h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+    #status { color: #666; margin-bottom: 1.5rem; }
+    button { padding: 0.75rem 2rem; font-size: 1rem; background: #222; color: white; border: none; border-radius: 8px; cursor: pointer; }
+    button:disabled { opacity: 0.5; }
+    #scoreboard { margin-top: 2rem; font-size: 1.1rem; display: none; text-align: center; }
+    #last-result { margin-top: 1rem; font-size: 1rem; color: #444; min-height: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>🐝 Spell Bee Bot</h1>
+  <p id="status">Ready to play!</p>
+  <button id="startBtn" onclick="startGame()">Start Game</button>
+
+  <div id="scoreboard">
+    Score: <strong id="score">0</strong> &nbsp;|&nbsp; Words: <strong id="word-count">0</strong>
+  </div>
+  <p id="last-result"></p>
+
+  <script>
+    let ws;
+    let audioContext;
+    let mediaStream;
+    let processor;
+
+    async function startGame() {
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('status').textContent = 'Connecting...';
+
+      try {
+        // Request microphone access
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new AudioContext({ sampleRate: 16000 });
+
+        // Connect to backend via WebSocket (replaces Daily.co)
+        ws = new WebSocket('ws://localhost:8000/ws');
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = () => {
+          document.getElementById('status').textContent = '🎙️ Connected! Listen for the bot...';
+          document.getElementById('scoreboard').style.display = 'block';
+          startStreaming();
+        };
+
+        ws.onmessage = (event) => {
+          if (typeof event.data === 'string') {
+            // JSON message — score update or error from bot
+            const msg = JSON.parse(event.data);
+
+            if (msg.type === 'score_update') {
+              document.getElementById('score').textContent = msg.score;
+              document.getElementById('word-count').textContent = msg.wordCount;
+              document.getElementById('last-result').textContent = msg.correct
+                ? `✅ Correct! "${msg.lastWord}"`
+                : `❌ Wrong. The word was "${msg.lastWord}"`;
+            }
+
+            if (msg.type === 'error') {
+              document.getElementById('status').textContent = `Error: ${msg.message}`;
+            }
+
+          } else {
+            // Binary data — audio from bot TTS, play it
+            playAudio(event.data);
+          }
+        };
+
+        ws.onerror = () => {
+          document.getElementById('status').textContent = 'Connection error. Is the server running?';
+          document.getElementById('startBtn').disabled = false;
+        };
+
+        ws.onclose = () => {
+          document.getElementById('status').textContent = 'Session ended.';
+          stopStreaming();
+        };
+
+      } catch (err) {
+        document.getElementById('status').textContent = `Failed to start: ${err.message}`;
+        document.getElementById('startBtn').disabled = false;
+      }
+    }
+
+    // Stream microphone audio to backend as raw 16-bit PCM
+    function startStreaming() {
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      processor.onaudioprocess = (e) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const float32 = e.inputBuffer.getChannelData(0);
+        // Convert float32 to int16 PCM
+        const int16 = new Int16Array(float32.length);
+        for (let i = 0; i < float32.length; i++) {
+          int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
+        }
+        ws.send(int16.buffer);
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+    }
+
+    function stopStreaming() {
+      if (processor) processor.disconnect();
+      if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+    }
+
+    // Queue and play audio chunks received from bot TTS
+    const audioQueue = [];
+    let isPlaying = false;
+
+    async function playAudio(arrayBuffer) {
+      audioQueue.push(arrayBuffer);
+      if (!isPlaying) drainQueue();
+    }
+
+    async function drainQueue() {
+      if (audioQueue.length === 0) { isPlaying = false; return; }
+      isPlaying = true;
+      const buffer = audioQueue.shift();
+      try {
+        const decoded = await audioContext.decodeAudioData(buffer);
+        const source = audioContext.createBufferSource();
+        source.buffer = decoded;
+        source.connect(audioContext.destination);
+        source.onended = drainQueue;
+        source.start();
+      } catch (err) {
+        console.error('Audio decode error:', err);
+        drainQueue(); // skip bad chunk and continue
+      }
+    }
+  </script>
+</body>
+</html>

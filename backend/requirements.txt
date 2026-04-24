@@ -1,0 +1,11 @@
+# Pipecat with all required extras
+pipecat-ai[deepgram,silero,websocket,groq,google]
+
+# Web framework
+fastapi
+uvicorn
+
+# Utilities
+python-dotenv
+aiohttp
+docstring-parser
