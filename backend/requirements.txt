@@ -1,11 +1,4 @@
-# Pipecat with all required extras
-pipecat-ai[deepgram,silero,websocket,groq,google]
-
-# Web framework
-fastapi
-uvicorn
-
-# Utilities
-python-dotenv
-aiohttp
-docstring-parser
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-dotenv>=1.0.0
+pipecat-ai[daily,deepgram,silero]>=0.0.40
