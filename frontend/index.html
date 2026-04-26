@@ -31,7 +31,7 @@
     <div class="btn-group">
         <button id="join-btn">1. Join Room</button>
         <button id="start-btn" disabled>2. Start Game</button>
-        <button id="next-btn"  disabled>Skip Word</button>
+        <!-- <button id="next-btn"  disabled>Skip Word</button> -->
     </div>
 
     <div id="status">Status: Offline</div>
@@ -43,7 +43,7 @@
 
     const joinBtn  = document.getElementById('join-btn');
     const startBtn = document.getElementById('start-btn');
-    const nextBtn  = document.getElementById('next-btn');
+    // const nextBtn  = document.getElementById('next-btn');
     const status   = document.getElementById('status');
     const scoreEl  = document.getElementById('score');
     const roundEl  = document.getElementById('round');
@@ -71,7 +71,7 @@
 
                 if (evt.data.wordCount >= 5) {
                     status.innerText = "Game Over!";
-                    nextBtn.disabled = true;
+                    // nextBtn.disabled = true;
                 }
             }
         });
@@ -81,13 +81,13 @@
         callFrame.sendAppMessage({ action: "start_game" }, "*");
         status.innerText = "Listen, then spell aloud. Bot grades after you pause.";
         startBtn.disabled = true;
-        nextBtn.disabled = false;
+        // nextBtn.disabled = false;
     };
 
-    nextBtn.onclick = () => {
-        callFrame.sendAppMessage({ action: "skip_word" }, "*");
-        status.innerText = "Skipped. Next word coming...";
-    };
+    // nextBtn.onclick = () => {
+    //     callFrame.sendAppMessage({ action: "skip_word" }, "*");
+    //     status.innerText = "Skipped. Next word coming...";
+    // };
 </script>
 </body>
 </html>

@@ -17,12 +17,12 @@ from pipecat.processors.frame_processor import FrameProcessor
 
 from words import WORDS_POOL
 
-logging.basicConfig(
-    filename="spellbee.log",
-    level=logging.DEBUG,
-    format="%(asctime)s %(message)s",
-)
 log = logging.getLogger("spellbee")
+log.setLevel(logging.DEBUG)
+log.propagate = False
+_handler = logging.FileHandler("spellbee.log")
+_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+log.addHandler(_handler)
 
 
 class SpellBeeValidator(FrameProcessor):
@@ -45,14 +45,12 @@ class SpellBeeValidator(FrameProcessor):
     async def process_frame(self, frame, direction) -> None:
         await super().process_frame(frame, direction)
 
-        log.debug(f"FRAME: {type(frame).__name__} | game_started={self._game_started} waiting_for_answer={self._waiting_for_answer} bot_speaking={self._bot_is_speaking} buffer={self._buffer!r}")
-
         if isinstance(frame, InputTransportMessageFrame):
             await self._handle_app_message(frame)
 
         elif isinstance(frame, TranscriptionFrame):
             await self._handle_transcription(frame)
-            return  
+            return
 
         elif isinstance(frame, UserStoppedSpeakingFrame):
             await self._handle_user_stopped_speaking(frame, direction)
@@ -81,7 +79,6 @@ class SpellBeeValidator(FrameProcessor):
             payload = payload["data"]
 
         action = payload.get("action")
-        log.debug(f"APP MESSAGE: action={action}")
 
         if action == "start_game" and self._waiting_to_start:
             self._waiting_to_start = False
@@ -93,25 +90,19 @@ class SpellBeeValidator(FrameProcessor):
             await self._advance_round(feedback="Okay, moving on.")
 
     async def _handle_transcription(self, frame: TranscriptionFrame) -> None:
-        log.debug(f"TRANSCRIPTION: text={frame.text!r} waiting={self._waiting_for_answer}")
         if not (self._game_started and self._waiting_for_answer):
             return
-
         token = frame.text.strip().lower().replace(".", "").replace(" ", "")
         if token:
             self._buffer += token
-            log.debug(f"BUFFER: {self._buffer!r}")
 
     async def _handle_user_stopped_speaking(self, frame, direction) -> None:
-        log.debug(f"USER STOPPED SPEAKING: buffer={self._buffer!r} waiting={self._waiting_for_answer}")
         if self._game_started and self._waiting_for_answer and self._buffer:
             await self._grade_current_buffer()
         await self.push_frame(frame, direction)
 
     async def _handle_user_started_speaking(self, frame, direction) -> None:
-        log.debug(f"USER STARTED SPEAKING: bot_speaking={self._bot_is_speaking}")
         if self._bot_is_speaking and self._game_started:
-            log.debug("INTERRUPTION: re-announcing current word")
             self._buffer = ""
             self._waiting_for_answer = False
             await self._re_announce_current_word()
@@ -120,7 +111,7 @@ class SpellBeeValidator(FrameProcessor):
     async def _start_game(self) -> None:
         self.current_word = self._pick_word()
         self._game_started = True
-        log.debug(f"GAME START: first word={self.current_word!r}")
+        log.debug(f"ROUND 1 | target={self.current_word!r}")
         prompt = f"Hello! Let's play Spell Bee. Your first word is {self.current_word}. Please spell it now."
         await self.push_frame(TextFrame(prompt))
         self._waiting_for_answer = True
@@ -130,8 +121,6 @@ class SpellBeeValidator(FrameProcessor):
             return
 
         attempt = self._buffer.strip()
-        log.debug(f"GRADING: attempt={attempt!r} correct={self.current_word!r}")
-
         self._waiting_for_answer = False
         self._buffer = ""
 
@@ -139,13 +128,12 @@ class SpellBeeValidator(FrameProcessor):
         if correct:
             self.score += 1
 
+        log.debug(f"ROUND {self.rounds_played + 1} | target={self.current_word!r} heard={attempt!r} correct={correct} score={self.score}")
         feedback = "That is correct!" if correct else f"Incorrect. The word was {self.current_word}."
-        log.debug(f"RESULT: correct={correct} score={self.score}")
         await self._advance_round(feedback=feedback)
 
     async def _advance_round(self, feedback: str) -> None:
         self.rounds_played += 1
-        log.debug(f"ADVANCE ROUND: round={self.rounds_played}/{self.max_rounds}")
 
         await self.push_frame(OutputTransportMessageFrame({
             "type": "score_update",
@@ -155,13 +143,13 @@ class SpellBeeValidator(FrameProcessor):
 
         if self.rounds_played < self.max_rounds:
             self.current_word = self._pick_word()
+            log.debug(f"ROUND {self.rounds_played + 1} | target={self.current_word!r}")
             utterance = f"{feedback} Your next word is {self.current_word}. Please spell {self.current_word}."
-            log.debug(f"NEXT WORD: {self.current_word!r}")
             await self.push_frame(TextFrame(utterance))
             self._waiting_for_answer = True
         else:
+            log.debug(f"GAME OVER | score={self.score}/{self.max_rounds}")
             final = f"{feedback} Game over! You scored {self.score} out of {self.max_rounds}. Well done!"
-            log.debug("GAME OVER")
             await self.push_frame(TextFrame(final))
             await self.push_frame(EndFrame())
 
