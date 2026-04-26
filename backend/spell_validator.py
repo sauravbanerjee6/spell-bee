@@ -1,37 +1,31 @@
-"""
-spell_validator.py
-
-Core game-logic FrameProcessor for the Spell Bee bot.
-Sits in the Pipecat pipeline between STT and TTS:
-
-    transport.input() → STT → SpellBeeValidator → TTS → transport.output()
-
-Responsibilities
-----------------
-- Reacts to app-messages from the frontend (start_game, submit_spelling, skip_word).
-- Accumulates transcription fragments into a per-round buffer.
-- Grades the buffer on submit, pushes score updates to the frontend via
-  OutputTransportMessageFrame, and drives the conversation with TextFrames.
-- Ends the pipeline cleanly with EndFrame after max_rounds are exhausted.
-"""
-
+import logging
 import random
 
 from pipecat.frames.frames import (
-    TextFrame,
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     EndFrame,
-    TranscriptionFrame,
     InputTransportMessageFrame,
+    InterruptionFrame,
     OutputTransportMessageFrame,
+    TextFrame,
+    TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
-from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.frame_processor import FrameProcessor
 
 from words import WORDS_POOL
 
+logging.basicConfig(
+    filename="spellbee.log",
+    level=logging.DEBUG,
+    format="%(asctime)s %(message)s",
+)
+log = logging.getLogger("spellbee")
+
 
 class SpellBeeValidator(FrameProcessor):
-    """Stateful frame processor that manages one full Spell Bee game session."""
 
     def __init__(self, max_rounds: int = 5) -> None:
         super().__init__()
@@ -42,52 +36,56 @@ class SpellBeeValidator(FrameProcessor):
         self.current_word: str = ""
         self.used_words: set[str] = set()
 
-        # Buffer that accumulates live transcription fragments within a round.
         self._buffer: str = ""
-
-        # State flags
         self._game_started: bool = False
         self._waiting_to_start: bool = True
         self._waiting_for_answer: bool = False
-
-    # ------------------------------------------------------------------
-    # Public pipeline entry-point
-    # ------------------------------------------------------------------
+        self._bot_is_speaking: bool = False
 
     async def process_frame(self, frame, direction) -> None:
         await super().process_frame(frame, direction)
+
+        log.debug(f"FRAME: {type(frame).__name__} | game_started={self._game_started} waiting_for_answer={self._waiting_for_answer} bot_speaking={self._bot_is_speaking} buffer={self._buffer!r}")
 
         if isinstance(frame, InputTransportMessageFrame):
             await self._handle_app_message(frame)
 
         elif isinstance(frame, TranscriptionFrame):
             await self._handle_transcription(frame)
-            # Intentionally block transcription frames from reaching TTS.
-            return
+            return  
 
-        else:
-            # Pass all other frames (audio, system, etc.) straight through.
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            await self._handle_user_stopped_speaking(frame, direction)
+
+        elif isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_is_speaking = True
             await self.push_frame(frame, direction)
 
-    # ------------------------------------------------------------------
-    # Private handlers
-    # ------------------------------------------------------------------
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_is_speaking = False
+            await self.push_frame(frame, direction)
+
+        elif isinstance(frame, UserStartedSpeakingFrame):
+            await self._handle_user_started_speaking(frame, direction)
+
+        elif isinstance(frame, InterruptionFrame):
+            self._bot_is_speaking = False
+            await self.push_frame(frame, direction)
+
+        else:
+            await self.push_frame(frame, direction)
 
     async def _handle_app_message(self, frame: InputTransportMessageFrame) -> None:
-        """Dispatch frontend app-messages to the appropriate game action."""
         payload = getattr(frame, "message", getattr(frame, "payload", {}))
         if isinstance(payload, dict) and "data" in payload:
             payload = payload["data"]
 
         action = payload.get("action")
+        log.debug(f"APP MESSAGE: action={action}")
 
         if action == "start_game" and self._waiting_to_start:
-            print("🎮 Game Starting...")
             self._waiting_to_start = False
             await self._start_game()
-
-        elif action == "submit_spelling" and self._game_started:
-            await self._grade_current_buffer()
 
         elif action == "skip_word" and self._game_started:
             self._buffer = ""
@@ -95,42 +93,45 @@ class SpellBeeValidator(FrameProcessor):
             await self._advance_round(feedback="Okay, moving on.")
 
     async def _handle_transcription(self, frame: TranscriptionFrame) -> None:
-        """Accumulate transcription tokens into the round buffer."""
+        log.debug(f"TRANSCRIPTION: text={frame.text!r} waiting={self._waiting_for_answer}")
         if not (self._game_started and self._waiting_for_answer):
             return
 
-        # Normalise: lowercase, strip punctuation and spaces so "B-R-O-C-C-O-L-I"
-        # and "broccoli" both reduce to the same comparison string.
         token = frame.text.strip().lower().replace(".", "").replace(" ", "")
         if token:
             self._buffer += token
-            print(f"📥 Buffer: {self._buffer!r}")
+            log.debug(f"BUFFER: {self._buffer!r}")
 
-    # ------------------------------------------------------------------
-    # Game flow helpers
-    # ------------------------------------------------------------------
+    async def _handle_user_stopped_speaking(self, frame, direction) -> None:
+        log.debug(f"USER STOPPED SPEAKING: buffer={self._buffer!r} waiting={self._waiting_for_answer}")
+        if self._game_started and self._waiting_for_answer and self._buffer:
+            await self._grade_current_buffer()
+        await self.push_frame(frame, direction)
+
+    async def _handle_user_started_speaking(self, frame, direction) -> None:
+        log.debug(f"USER STARTED SPEAKING: bot_speaking={self._bot_is_speaking}")
+        if self._bot_is_speaking and self._game_started:
+            log.debug("INTERRUPTION: re-announcing current word")
+            self._buffer = ""
+            self._waiting_for_answer = False
+            await self._re_announce_current_word()
+        await self.push_frame(frame, direction)
 
     async def _start_game(self) -> None:
-        """Pick the first word and kick off the game."""
         self.current_word = self._pick_word()
         self._game_started = True
-
-        prompt = (
-            f"Hello! Let's play Spell Bee. "
-            f"Your first word is {self.current_word}. Please spell it now."
-        )
+        log.debug(f"GAME START: first word={self.current_word!r}")
+        prompt = f"Hello! Let's play Spell Bee. Your first word is {self.current_word}. Please spell it now."
         await self.push_frame(TextFrame(prompt))
         self._waiting_for_answer = True
 
     async def _grade_current_buffer(self) -> None:
-        """Compare the accumulated buffer to the current word and advance."""
         if not self._waiting_for_answer:
             return
 
         attempt = self._buffer.strip()
-        print(f"✅ Grading: {attempt!r} vs {self.current_word!r}")
+        log.debug(f"GRADING: attempt={attempt!r} correct={self.current_word!r}")
 
-        # Lock immediately so late-arriving transcription frames are ignored.
         self._waiting_for_answer = False
         self._buffer = ""
 
@@ -138,55 +139,42 @@ class SpellBeeValidator(FrameProcessor):
         if correct:
             self.score += 1
 
-        feedback = (
-            "That is correct!"
-            if correct
-            else f"Incorrect. The word was {self.current_word}."
-        )
+        feedback = "That is correct!" if correct else f"Incorrect. The word was {self.current_word}."
+        log.debug(f"RESULT: correct={correct} score={self.score}")
         await self._advance_round(feedback=feedback)
 
     async def _advance_round(self, feedback: str) -> None:
-        """Increment round counter, push a score update, then either give the
-        next word or end the game."""
         self.rounds_played += 1
+        log.debug(f"ADVANCE ROUND: round={self.rounds_played}/{self.max_rounds}")
 
-        # Notify the frontend so it can update the scoreboard in real time.
-        await self.push_frame(
-            OutputTransportMessageFrame({
-                "type": "score_update",
-                "score": self.score,
-                "wordCount": self.rounds_played,
-            })
-        )
+        await self.push_frame(OutputTransportMessageFrame({
+            "type": "score_update",
+            "score": self.score,
+            "wordCount": self.rounds_played,
+        }))
 
         if self.rounds_played < self.max_rounds:
             self.current_word = self._pick_word()
-            utterance = (
-                f"{feedback} "
-                f"Your next word is {self.current_word}. "
-                f"Please spell {self.current_word}."
-            )
-            print(f"🤖 Bot: {utterance}")
+            utterance = f"{feedback} Your next word is {self.current_word}. Please spell {self.current_word}."
+            log.debug(f"NEXT WORD: {self.current_word!r}")
             await self.push_frame(TextFrame(utterance))
             self._waiting_for_answer = True
         else:
-            final = (
-                f"{feedback} "
-                f"Game over! You scored {self.score} out of {self.max_rounds}. "
-                f"Well done!"
-            )
-            print(f"🏁 {final}")
+            final = f"{feedback} Game over! You scored {self.score} out of {self.max_rounds}. Well done!"
+            log.debug("GAME OVER")
             await self.push_frame(TextFrame(final))
             await self.push_frame(EndFrame())
 
+    async def _re_announce_current_word(self) -> None:
+        utterance = f"Sorry, let me repeat that. Your word is {self.current_word}. Please spell {self.current_word}."
+        await self.push_frame(TextFrame(utterance))
+        self._waiting_for_answer = True
+
     def _pick_word(self) -> str:
-        """Return a random word from the pool, avoiding repeats within a game.
-        Resets the used-set if all words have been exhausted."""
         available = [w for w in WORDS_POOL if w not in self.used_words]
         if not available:
             self.used_words.clear()
             available = list(WORDS_POOL)
-
         word = random.choice(available)
         self.used_words.add(word)
         return word

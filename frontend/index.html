@@ -11,10 +11,9 @@
         .btn-group { display: flex; flex-direction: column; gap: 12px; }
         button { padding: 15px; font-size: 16px; font-weight: bold; cursor: pointer; border: none; border-radius: 8px; transition: 0.2s; }
 
-        #join-btn   { background: #27ae60; color: white; }
-        #start-btn  { background: #2980b9; color: white; }
-        #submit-btn { background: #f39c12; color: white; }
-        #next-btn   { background: #95a5a6; color: white; }
+        #join-btn  { background: #27ae60; color: white; }
+        #start-btn { background: #2980b9; color: white; }
+        #next-btn  { background: #95a5a6; color: white; }
 
         button:disabled { background: #bdc3c7 !important; cursor: not-allowed; }
         #status { margin-top: 20px; font-style: italic; color: #7f8c8d; }
@@ -31,9 +30,8 @@
 
     <div class="btn-group">
         <button id="join-btn">1. Join Room</button>
-        <button id="start-btn"   disabled>2. Start Game</button>
-        <button id="submit-btn"  disabled>3. Submit Spelling</button>
-        <button id="next-btn"    disabled>Skip Word</button>
+        <button id="start-btn" disabled>2. Start Game</button>
+        <button id="next-btn"  disabled>Skip Word</button>
     </div>
 
     <div id="status">Status: Offline</div>
@@ -43,13 +41,12 @@
     const ROOM_URL = "https://saurav6.daily.co/spellbee";
     let callFrame = null;
 
-    const joinBtn   = document.getElementById('join-btn');
-    const startBtn  = document.getElementById('start-btn');
-    const submitBtn = document.getElementById('submit-btn');
-    const nextBtn   = document.getElementById('next-btn');
-    const status    = document.getElementById('status');
-    const scoreEl   = document.getElementById('score');
-    const roundEl   = document.getElementById('round');
+    const joinBtn  = document.getElementById('join-btn');
+    const startBtn = document.getElementById('start-btn');
+    const nextBtn  = document.getElementById('next-btn');
+    const status   = document.getElementById('status');
+    const scoreEl  = document.getElementById('score');
+    const roundEl  = document.getElementById('round');
 
     joinBtn.onclick = async () => {
         joinBtn.disabled = true;
@@ -74,7 +71,6 @@
 
                 if (evt.data.wordCount >= 5) {
                     status.innerText = "Game Over!";
-                    submitBtn.disabled = true;
                     nextBtn.disabled = true;
                 }
             }
@@ -83,19 +79,14 @@
 
     startBtn.onclick = () => {
         callFrame.sendAppMessage({ action: "start_game" }, "*");
-        status.innerText = "Game in progress...";
+        status.innerText = "Listen, then spell aloud. Bot grades after you pause.";
         startBtn.disabled = true;
-        submitBtn.disabled = false;
         nextBtn.disabled = false;
-    };
-
-    submitBtn.onclick = () => {
-        callFrame.sendAppMessage({ action: "submit_spelling" }, "*");
-        status.innerText = "Submitted! Bot is thinking...";
     };
 
     nextBtn.onclick = () => {
         callFrame.sendAppMessage({ action: "skip_word" }, "*");
+        status.innerText = "Skipped. Next word coming...";
     };
 </script>
 </body>
